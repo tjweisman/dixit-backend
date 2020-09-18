@@ -1,0 +1,4 @@
+#! /bin/bash
+
+export DATABASE_URL=postgres://dixit_user:password@localhost:5432/dixit
+node index.js
