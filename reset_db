@@ -1,0 +1,3 @@
+#! /bin/bash
+
+psql -U dixit_user -d dixit -f database_structure.sql
