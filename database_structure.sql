@@ -1,6 +1,6 @@
 DROP TABLE IF EXISTS users, games, cards, default_cards;
 
-DROP TYPE IF EXISTS card_state;
+DROP TYPE IF EXISTS user_state, card_state;
 
 CREATE TABLE users(
 	
@@ -10,6 +10,7 @@ CREATE TABLE users(
 	gid INTEGER,
 	score INTEGER DEFAULT 0,
 	turn_order SERIAL,
+	player_action INTEGER DEFAULT 0,
 	PRIMARY KEY(uid),
 
 	CONSTRAINT user_game UNIQUE(name, game)

@@ -140,15 +140,13 @@ function broadcast_hands(gid) {
   });
 }
 
-function broadcast_turn(gid) {
-  client.query("SELECT turn FROM games WHERE gid = $1;", [gid])
-  .then(async res => {
-    username = await get_username(res.rows[0].turn);
-    io.to(gid).emit('turn', {
-      uid:res.rows[0].turn,
-      username: username
-    });
-  });
+function reset_player_actions(gid) {
+  client.query("UPDATE users SET player_action = 0 WHERE gid = $1;");
+}
+
+function set_guesser_actions(gid, turn, guesser_action) {
+  client.query("UPDATE users SET player_action = $3 WHERE gid = $1 AND uid != $2",
+    [gid, turn, guesser_action]);
 }
 
 async function initialize_game(gid) {
@@ -159,8 +157,40 @@ async function initialize_game(gid) {
 
   begin_game(gid);
   broadcast_hands(gid);
-  broadcast_turn(gid);
+
   io.to(gid).emit('start game');
+  begin_turn(gid);
+}
+
+async function begin_turn(gid) {
+  res = await client.query("SELECT turn FROM games WHERE gid = $1;", [gid]);
+  turn = res.rows[0].turn;
+  username = await get_username(turn);
+
+  reset_player_actions(gid);
+
+  io.to(gid).emit('round prompt', {
+      uid:res.rows[0].turn,
+      username: username
+    });
+}
+
+function receive_prompt(data) {
+  client.query("UPDATE users SET player_action = $1 WHERE gid = $2 AND $uid = $3;",
+    data.cid, data.gid, data.uid);
+}
+
+async function receive_action(data) {
+  await client.query("UPDATE users SET player_action = $1 WHERE gid = $2 AND uid = $3;",
+    [data,cid, data.gid, data.uid]);
+
+  res = await client.query("SELECT uid FROM users WHERE gid = $1 AND player_action = 0;",
+    [data.gid]);
+
+  if(res.rows.length > 0) {
+    return false;
+  }
+  return true;
 }
 
 async function get_users(gid, callback) {
@@ -203,8 +233,30 @@ io.on('connection', (socket) => {
   socket.on("prompt", (data, callback) => {
     console.log("got prompt");
     console.log(data);
-    io.to(data.gid).emit("prompt", data);
+
+    receive_prompt(data.gid);
+    io.to(data.gid).emit("round secret", data);
     callback();
+  });
+
+  socket.on("choose secret", async data => {
+    io.to(data.gid).emit("other secret", data);
+    let players_ready = await receive_action(data);
+    if(players_ready) {
+      set_guesser_actions(data.gid, data.turn);
+      io.to(data.gid).emit("round guess", {
+        //TODO: shuffle this before returning it!
+        order:[...Array(data.num_players).keys()]
+      });
+    }
+  });
+
+  socket.on("guess card", data => {
+    io.to(data.gid).emit("other guess", data);
+    let players_ready = await receive_action(data);
+    if(players_ready) {
+
+    }
   });
 
 });
