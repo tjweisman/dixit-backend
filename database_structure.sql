@@ -1,6 +1,6 @@
 DROP TABLE IF EXISTS users, games, cards, default_cards;
 
-DROP TYPE IF EXISTS user_state, card_state;
+DROP TYPE IF EXISTS card_state;
 
 CREATE TABLE users(
 	
