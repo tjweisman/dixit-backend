@@ -175,6 +175,18 @@ function receive_prompt(data) {
   play_card(data.cid);
 }
 
+function shuffle(array) {
+  let n = array.length;
+  let shuffled = new Array(n);
+  let indices = [...Array(n).keys()];
+
+  for(let i = 0;i < n; i++) {
+    index = indices.splice(Math.floor(Math.random() * (n - i)), 1)[0];
+    shuffled[index] = array[i];
+  }
+  return shuffled;
+}
+
 async function receive_action(data) {
   await client.query("UPDATE users SET player_action = $1 WHERE gid = $2 AND uid = $3;",
     [data.cid, data.gid, data.uid]);
@@ -256,8 +268,7 @@ io.on('connection', (socket) => {
     if(players_ready) {
       set_guesser_actions(data.gid, data.turn, 0);
       io.to(data.gid).emit("round guess", {
-        //TODO: shuffle this before returning it!
-        order:[...Array(data.num_players).keys()]
+        order:shuffle([...Array(data.num_players).keys()])
       });
     }
   });
