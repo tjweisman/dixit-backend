@@ -1,6 +1,6 @@
 DROP TABLE IF EXISTS users, games, cards, default_cards;
 
-DROP TYPE IF EXISTS card_state;
+DROP TYPE IF EXISTS card_state, game_state;
 
 CREATE TABLE users(
 	
@@ -16,10 +16,14 @@ CREATE TABLE users(
 	CONSTRAINT user_game UNIQUE(name, game)
 );
 
+CREATE TYPE game_state AS ENUM ('pregame', 'prompt', 'secret', 'guess');
+
 CREATE TABLE games(
 	gid SERIAL UNIQUE,
 	name varchar(40) CONSTRAINT name_unique UNIQUE NOT NULL,
 	turn INTEGER,
+	turn_index INTEGER DEFAULT 0,
+	state game_state DEFAULT 'pregame',
 	in_progress BOOLEAN DEFAULT FALSE,
 	hand_size INTEGER DEFAULT 4,
 	PRIMARY KEY(gid),
@@ -76,7 +80,7 @@ INSERT INTO default_cards(filename) VALUES
 ('rok_4.png'),
 ('rok_5.png');
 
-CREATE TYPE card_state AS ENUM ('deck', 'hand', 'discard');
+CREATE TYPE card_state AS ENUM ('deck', 'hand', 'table', 'discard');
 
 CREATE TABLE cards(
 	cid SERIAL UNIQUE,

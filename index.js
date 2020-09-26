@@ -48,7 +48,7 @@ async function join_game(socket, username, game, callback) {
     .then(async res => {
       uid = res.rows[0].uid;
       return await client.query("INSERT INTO games(name, turn) VALUES($1, $2) \
-      ON CONFLICT ON CONSTRAINT name_unique DO UPDATE SET name = EXCLUDED.name RETURNING gid;",
+      ON CONFLICT ON CONSTRAINT name_unique DO UPDATE SET name = EXCLUDED.name RETURNING gid, state;",
       [game, uid]).catch(err => {handle_generic_error(err, response_data, callback);});
     })
     .then(res => {
@@ -60,6 +60,7 @@ async function join_game(socket, username, game, callback) {
       response_data.response = "success";
       response_data.uid = uid;
       response_data.gid = res.rows[0].gid;
+      response_data.state = state;
 
       callback(response_data);
       io.to(res.rows[0].gid).emit("player join");
@@ -68,13 +69,41 @@ async function join_game(socket, username, game, callback) {
       console.log("user " + username + " joined game "+ game);
     }).catch(err => {
       if(err.code == 23505 && err.constraint == "user_game") {
-        response_data.response = "error";
-        response_data.error = "user_in_game";
+        //TODO: validate a password or something
+
+        response_data.response = "success";
+        //response_data.response = "error";
+        //response_data.error = "user_in_game";
         callback(response_data);
       } else {
         handle_generic_error(err, response_data, callback);
       }
     });
+}
+
+async function rejoin_user(socket, username, game, callback) {
+  let response_data = {
+    response:"success",
+    username:username,
+    game:game
+  };
+  game_data = await get_game_data(game);
+  response_data.gid = game_data.gid;
+  response_data.state = game_data.state;
+  response_data.turn = game_data.turn;
+  response_data.turn_index = game_data.turn_index;
+
+  callback(response_data);
+}
+
+function update_game_state(gid, state) {
+  client.query("UPDATE games SET state = $1 WHERE gid = $2;",
+    [state, gid]);
+}
+
+function update_score(uid, score) {
+  client.query("UPDATE users SET score = $1 WHERE uid = $2;",
+    [score, uid]);
 }
 
 function delete_all_data() {
@@ -104,6 +133,17 @@ async function get_username(uid) {
   return res.rows[0].name;
 }
 
+async function get_remaining_cards(gid) {
+  const res = await client.query("SELECT * FROM cards WHERE gid = $1 AND state = 'deck';",
+    [gid]);
+  return res.rows.length;
+}
+
+async function get_game_data(name) {
+  const res = await client.query("SELECT gid, state, turn, turn_index FROM games WHERE name = $1;", [name]);
+  return res.rows[0];
+}
+
 async function setup_cards(gid) {
   await client.query("INSERT INTO cards(filename, gid) (SELECT filename, gid FROM default_cards INNER JOIN games ON $1 = gid);",
     [gid]);
@@ -112,7 +152,7 @@ async function setup_cards(gid) {
 function begin_game(gid) {
   client.query("UPDATE games SET in_progress = TRUE WHERE gid = $1;",
     [gid]);
-  advance_turn(gid, 0);
+  begin_turn(gid, 0);
   io.to(gid).emit('start game');
 }
 
@@ -137,15 +177,15 @@ async function deal_cards(gid, to_deal) {
   }
   let remaining_cards = cards.length - counter;
   await Promise.all(hand_updates);
-  broadcast_hands(gid, remaining_cards);
+  broadcast_cards(gid, remaining_cards);
 }
 
-function broadcast_hands(gid, remaining_cards) {
-  client.query("SELECT cid, filename, uid FROM cards WHERE gid = $1 AND state = 'hand';", [gid])
+function broadcast_cards(gid, remaining_cards) {
+  client.query("SELECT cid, filename, uid FROM cards WHERE gid = $1 AND state = 'hand' OR state = 'table';", [gid])
   .then(res => {
     console.log("sending deal message");
     console.log(res.rows);
-    io.to(gid).emit('user hands', {
+    io.to(gid).emit('card update', {
       cards: res.rows,
       remaining: remaining_cards
     });
@@ -153,7 +193,7 @@ function broadcast_hands(gid, remaining_cards) {
 }
 
 function play_card(cid) {
-  client.query("UPDATE cards SET state = 'discard' WHERE cid = $1;", [cid]);
+  client.query("UPDATE cards SET state = 'table' WHERE cid = $1;", [cid]);
 }
 
 function reset_player_actions(gid) {
@@ -207,7 +247,12 @@ async function receive_action(data) {
   return true;
 }
 
-async function advance_turn(gid, turn_index) {
+async function advance_turn(gid) {
+  const res = await client.query("UPDATE games SET turn_index = turn_index + 1 WHERE gid = $1 RETURNING turn_index;", [gid]);
+  begin_turn(gid, res.rows[0].turn_index);
+}
+
+async function begin_turn(gid, turn_index) {
   const res = await client.query("SELECT uid FROM users WHERE gid = $1 ORDER BY turn_order;", 
     [gid]);
 
@@ -215,8 +260,10 @@ async function advance_turn(gid, turn_index) {
   let next_player = res.rows[turn_index % num_users].uid;
 
   client.query("UPDATE games SET turn = $1 WHERE gid = $2;", [next_player, gid]);
+  client.query("UPDATE cards SET state = 'discard' WHERE gid = $1 AND state = 'table';", [gid]);
   reset_player_actions(gid);
 
+  update_game_state(gid, 'prompt');
   io.to(gid).emit('round prompt', {
       uid:next_player
     });
@@ -264,6 +311,7 @@ io.on('connection', (socket) => {
     console.log(data);
 
     receive_prompt(data);
+    update_game_state(data.gid, 'secret');
     io.to(data.gid).emit("round secret", data);
     callback();
   });
@@ -273,6 +321,7 @@ io.on('connection', (socket) => {
     io.to(data.gid).emit("other secret", data);
     let players_ready = await receive_action(data);
     if(players_ready) {
+      update_game_state(data.gid, 'guess');
       set_guesser_actions(data.gid, data.turn, 0);
       io.to(data.gid).emit("round guess", {
         order:shuffle([...Array(data.num_players).keys()])
@@ -286,8 +335,17 @@ io.on('connection', (socket) => {
     if(players_ready) {
       io.to(data.gid).emit("reveal guess", {});
       deal_cards(data.gid, 1);
-      advance_turn(data.gid, data.turn_index);
+      advance_turn(data.gid);
     }
   });
+
+  socket.on("score update", data {
+    update_score(data.uid, data.score);
+  });
+
+  socket.on("get cards", data) {
+    num_remaining = get_remaining_cards(data.gid);
+    broadcast_cards(data.gid, num_remaining);
+  }
 
 });
