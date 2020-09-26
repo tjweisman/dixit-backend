@@ -36,6 +36,13 @@ async function join_game(socket, username, game, callback) {
     username:username,
     game:game
   };
+  const resp = await client.query("SELECT in_progress FROM games WHERE name = $1;", [game]);
+  if(resp.rows.length > 0 && resp.rows[0].in_progress) {
+    response_data.response = "error";
+    response_data.error = "in_progress";
+    callback(response_data);
+    return;
+  }
   client.query("INSERT INTO users(name, game) VALUES($1, $2) RETURNING uid",
       [username, game])
     .then(async res => {
