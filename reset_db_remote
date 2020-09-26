@@ -1,0 +1,3 @@
+#! /bin/bash
+
+cat database_structure.sql | heroku pg:psql
