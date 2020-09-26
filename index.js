@@ -36,13 +36,6 @@ async function join_game(socket, username, game, callback) {
     username:username,
     game:game
   };
-  const resp = await client.query("SELECT in_progress FROM games WHERE name = $1;", [game]);
-  if(resp.rows.length > 0 && resp.rows[0].in_progress) {
-    response_data.response = "error";
-    response_data.error = "in_progress";
-    callback(response_data);
-    return;
-  }
   client.query("INSERT INTO users(name, game) VALUES($1, $2) RETURNING uid",
       [username, game])
     .then(async res => {
@@ -54,27 +47,29 @@ async function join_game(socket, username, game, callback) {
     .then(res => {
       client.query("UPDATE users SET gid = $1 WHERE uid = $2;",
         [res.rows[0].gid, uid]).catch(err => {handle_generic_error(err, response_data, callback);});
-
       socket.join(res.rows[0].gid);
 
       response_data.response = "success";
       response_data.uid = uid;
       response_data.gid = res.rows[0].gid;
-      response_data.state = state;
+      response_data.game_data = {
+        state:res.rows[0].state
+      }
 
       callback(response_data);
-      io.to(res.rows[0].gid).emit("player join");
+      socket.to(res.rows[0].gid).emit("player join");
 
 
-      console.log("user " + username + " joined game "+ game);
+      console.log("new user " + username + " joined game "+ game);
     }).catch(err => {
       if(err.code == 23505 && err.constraint == "user_game") {
         //TODO: validate a password or something
 
-        response_data.response = "success";
+        console.log("user " + username + " rejoined game " + game);
+        rejoin_user(socket, username, game, callback);
+
         //response_data.response = "error";
         //response_data.error = "user_in_game";
-        callback(response_data);
       } else {
         handle_generic_error(err, response_data, callback);
       }
@@ -87,12 +82,13 @@ async function rejoin_user(socket, username, game, callback) {
     username:username,
     game:game
   };
+  uid = await get_uid(username);
   game_data = await get_game_data(game);
+  response_data.uid = uid;
   response_data.gid = game_data.gid;
-  response_data.state = game_data.state;
-  response_data.turn = game_data.turn;
-  response_data.turn_index = game_data.turn_index;
+  response_data.game_data = game_data;
 
+  socket.join(game_data.gid);
   callback(response_data);
 }
 
@@ -133,14 +129,20 @@ async function get_username(uid) {
   return res.rows[0].name;
 }
 
+async function get_uid(username) {
+  const res = await client.query("SELECT uid FROM users WHERE name = $1;", [username]);
+  return res.rows[0].uid;
+}
+
 async function get_remaining_cards(gid) {
   const res = await client.query("SELECT * FROM cards WHERE gid = $1 AND state = 'deck';",
     [gid]);
+  console.log("remaining cards: " + res.rows.length);
   return res.rows.length;
 }
 
 async function get_game_data(name) {
-  const res = await client.query("SELECT gid, state, turn, turn_index FROM games WHERE name = $1;", [name]);
+  const res = await client.query("SELECT * FROM games WHERE name = $1;", [name]);
   return res.rows[0];
 }
 
@@ -150,7 +152,7 @@ async function setup_cards(gid) {
 }
 
 function begin_game(gid) {
-  client.query("UPDATE games SET in_progress = TRUE WHERE gid = $1;",
+  client.query("UPDATE games SET state = 'prompt' WHERE gid = $1;",
     [gid]);
   begin_turn(gid, 0);
   io.to(gid).emit('start game');
@@ -181,7 +183,7 @@ async function deal_cards(gid, to_deal) {
 }
 
 function broadcast_cards(gid, remaining_cards) {
-  client.query("SELECT cid, filename, uid FROM cards WHERE gid = $1 AND state = 'hand' OR state = 'table';", [gid])
+  client.query("SELECT cid, filename, uid, state FROM cards WHERE gid = $1 AND state = 'hand' OR state = 'table';", [gid])
   .then(res => {
     console.log("sending deal message");
     console.log(res.rows);
@@ -219,6 +221,8 @@ function receive_prompt(data) {
     [data.cid, data.gid, data.uid]).catch(e => {
       console.log(e.stack);
     });
+  client.query("UPDATE games SET prompt = $1 WHERE gid = $2;",
+    [data.prompt, data.gid]);
   play_card(data.cid);
 }
 
@@ -312,7 +316,7 @@ io.on('connection', (socket) => {
 
     receive_prompt(data);
     update_game_state(data.gid, 'secret');
-    io.to(data.gid).emit("round secret", data);
+    io.to(data.gid).emit("other prompt", data);
     callback();
   });
 
@@ -339,13 +343,13 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on("score update", data {
+  socket.on("score update", data => {
     update_score(data.uid, data.score);
   });
 
-  socket.on("get cards", data) {
-    num_remaining = get_remaining_cards(data.gid);
+  socket.on("get cards", async data => {
+    num_remaining = await get_remaining_cards(data.gid);
     broadcast_cards(data.gid, num_remaining);
-  }
+  });
 
 });

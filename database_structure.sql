@@ -24,8 +24,8 @@ CREATE TABLE games(
 	turn INTEGER,
 	turn_index INTEGER DEFAULT 0,
 	state game_state DEFAULT 'pregame',
-	in_progress BOOLEAN DEFAULT FALSE,
 	hand_size INTEGER DEFAULT 4,
+	prompt VARCHAR,
 	PRIMARY KEY(gid),
 
 	CONSTRAINT fk_turn FOREIGN KEY(turn) REFERENCES users(uid) ON DELETE SET NULL
