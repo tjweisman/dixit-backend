@@ -1,3 +1,3 @@
 #! /bin/bash
 
-cat database_structure.sql | heroku pg:psql
+cat database_structure.sql | heroku pg:psql -a dixit-for-bibas

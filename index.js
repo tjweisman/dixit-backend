@@ -36,6 +36,13 @@ async function join_game(socket, username, game, callback) {
     username:username,
     game:game
   };
+  let can_join = await user_can_join(username, game);
+  if(!can_join) {
+    response_data.response = "error";
+    response_data.error = "in_progress";
+    callback(response_data);
+    return;
+  }
   client.query("INSERT INTO users(name, game) VALUES($1, $2) RETURNING uid",
       [username, game])
     .then(async res => {
@@ -90,6 +97,19 @@ async function rejoin_user(socket, username, game, callback) {
 
   socket.join(game_data.gid);
   callback(response_data);
+}
+
+async function user_can_join(user, game) {
+  let game_data = await get_game_data(game);
+  if(!game_data || game_data.state == "pregame") {
+    return true
+  }
+  let res = await client.query("SELECT * FROM users WHERE gid = $1 AND name = $2;",
+    [game_data.gid, user]);
+  if(res.rows.length == 0) {
+    return false;
+  }
+  return true;
 }
 
 function update_game_state(gid, state) {
