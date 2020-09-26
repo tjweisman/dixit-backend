@@ -36,10 +36,10 @@ async function join_game(socket, username, game, callback) {
     username:username,
     game:game
   };
-  let can_join = await user_can_join(username, game);
-  if(!can_join) {
+  let join_status = await user_can_join(username, game);
+  if(!join_status.allowed) {
     response_data.response = "error";
-    response_data.error = "in_progress";
+    response_data.error = join_status.reason;
     callback(response_data);
     return;
   }
@@ -52,8 +52,9 @@ async function join_game(socket, username, game, callback) {
       [game, uid]).catch(err => {handle_generic_error(err, response_data, callback);});
     })
     .then(res => {
-      client.query("UPDATE users SET gid = $1 WHERE uid = $2;",
-        [res.rows[0].gid, uid]).catch(err => {handle_generic_error(err, response_data, callback);});
+      client.query("UPDATE users SET gid = $1, socket = $3 WHERE uid = $2;",
+        [res.rows[0].gid, uid, socket.id]).catch(err => {handle_generic_error(err, response_data, callback);});
+
       socket.join(res.rows[0].gid);
 
       response_data.response = "success";
@@ -89,7 +90,11 @@ async function rejoin_user(socket, username, game, callback) {
     username:username,
     game:game
   };
-  uid = await get_uid(username);
+
+  const res = await client.query("UPDATE users SET socket = $1 WHERE name = $2 RETURNING uid;", 
+    [socket.id, username]);
+  uid = res.rows[0].uid;
+
   game_data = await get_game_data(game);
   response_data.uid = uid;
   response_data.gid = game_data.gid;
@@ -101,15 +106,34 @@ async function rejoin_user(socket, username, game, callback) {
 
 async function user_can_join(user, game) {
   let game_data = await get_game_data(game);
-  if(!game_data || game_data.state == "pregame") {
-    return true
+  let join_status = {
+    allowed:true
+  };
+
+  //no game initialized: fine to join
+  if(!game_data) {
+    return join_status;
   }
   let res = await client.query("SELECT * FROM users WHERE gid = $1 AND name = $2;",
     [game_data.gid, user]);
-  if(res.rows.length == 0) {
-    return false;
+
+  //the game has started and the user doesn't already exist: can't join
+  if(!(game.state == "pregame") && res.rows.length == 0) {
+    join_status.allowed = false;
+    join_status.reason = "in_progress"
+    return join_status;
+  } else if(res.rows.length == 0) {
+    return join_status;
   }
-  return true;
+  console.log("socket: ");
+  console.log(res.rows[0].socket);
+  if(res.rows[0].socket) {
+    console.log("socket was not null.");
+    join_status.allowed = false;
+    join_status.reason = "user_connected";
+    return join_status;
+  }
+  return join_status;
 }
 
 function update_game_state(gid, state) {
@@ -370,6 +394,11 @@ io.on('connection', (socket) => {
   socket.on("get cards", async data => {
     num_remaining = await get_remaining_cards(data.gid);
     broadcast_cards(data.gid, num_remaining);
+  });
+
+  socket.on("disconnect", (reason) => {
+    console.log("client disconnected. reason: "+ reason);
+    client.query("UPDATE users SET socket = NULL WHERE socket = $1;", [socket.id]);
   });
 
 });
