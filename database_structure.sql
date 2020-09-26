@@ -21,7 +21,7 @@ CREATE TABLE games(
 	name varchar(40) CONSTRAINT name_unique UNIQUE NOT NULL,
 	turn INTEGER,
 	in_progress BOOLEAN DEFAULT FALSE,
-	hand_size INTEGER DEFAULT 2,
+	hand_size INTEGER DEFAULT 4,
 	PRIMARY KEY(gid),
 
 	CONSTRAINT fk_turn FOREIGN KEY(turn) REFERENCES users(uid) ON DELETE SET NULL
@@ -34,7 +34,10 @@ CREATE TABLE default_cards(
 	filename VARCHAR NOT NULL
 );
 
-INSERT INTO default_cards(filename) VALUES ('tmp1.jpg'), ('tmp2.jpg'), ('tmp3.jpg'), ('tmp4.jpg'), ('tmp5.jpg'), ('tmp6.jpg'), ('tmp7.jpg'), ('tmp8.jpg');
+INSERT INTO default_cards(filename) VALUES ('card1.png'), ('card2.png'), 
+('card3.png'), ('card4.png'), ('card5.png'), ('card6.png'), ('card7.png'), ('card8.png'),
+('card9.png'), ('card10.png'), ('card11.png'), ('card12.png'), ('card13.png'), ('card14.png'),
+('card15.png');
 
 CREATE TYPE card_state AS ENUM ('deck', 'hand', 'discard');
 
