@@ -71,7 +71,6 @@ async function join_game(socket, username, game, callback) {
       console.log("new user " + username + " joined game "+ game);
     }).catch(err => {
       if(err.code == 23505 && err.constraint == "user_game") {
-        //TODO: validate a password or something
 
         console.log("user " + username + " rejoined game " + game);
         rejoin_user(socket, username, game, callback);
@@ -118,7 +117,7 @@ async function user_can_join(user, game) {
     [game_data.gid, user]);
 
   //the game has started and the user doesn't already exist: can't join
-  if(!(game.state == "pregame") && res.rows.length == 0) {
+  if(!(game_data.state == "pregame") && res.rows.length == 0) {
     join_status.allowed = false;
     join_status.reason = "in_progress"
     return join_status;
@@ -251,12 +250,14 @@ function set_guesser_actions(gid, turn, guesser_action) {
     [gid, turn, guesser_action]);
 }
 
-async function initialize_game(gid) {
+async function initialize_game(gid, options) {
   await client.query("DELETE FROM cards WHERE gid = $1", [gid]);
   await setup_cards(gid);
-  let hs_resp = await client.query("SELECT hand_size FROM games WHERE gid = $1;", [gid]);
+
+  client.query("UPDATE games SET hand_size = $1 WHERE gid = $2;",
+    [options.hand_size, gid]);
   
-  deal_cards(gid, hs_resp.rows[0].hand_size);
+  deal_cards(gid, options.hand_size);
   begin_game(gid);
 }
 
@@ -350,8 +351,8 @@ io.on('connection', (socket) => {
     get_users(game, callback);
   });
 
-  socket.on("start game", (gid) => {
-    initialize_game(gid);
+  socket.on("start game", (data) => {
+    initialize_game(data.gid, data.options);
   });
 
   socket.on("prompt", (data, callback) => {
