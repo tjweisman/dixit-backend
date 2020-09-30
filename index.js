@@ -250,6 +250,11 @@ function set_guesser_actions(gid, turn, guesser_action) {
     [gid, turn, guesser_action]);
 }
 
+async function reset_game(gid) {
+  client.query("UPDATE users SET score = 0 WHERE gid = $1;", [gid]);
+  client.query("UPDATE games SET state = 'pregame', turn_index = 0 WHERE gid = $1;", [gid]);
+}
+
 async function initialize_game(gid, options) {
   await client.query("DELETE FROM cards WHERE gid = $1", [gid]);
   await setup_cards(gid);
@@ -400,6 +405,12 @@ io.on('connection', (socket) => {
   socket.on("disconnect", (reason) => {
     console.log("client disconnected. reason: "+ reason);
     client.query("UPDATE users SET socket = NULL WHERE socket = $1;", [socket.id]);
+  });
+
+  socket.on("reset game", data => {
+    console.log("Received reset request");
+    reset_game(data.gid);
+    io.to(data.gid).emit("reset game");
   });
 
 });
