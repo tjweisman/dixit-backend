@@ -266,6 +266,24 @@ async function initialize_game(gid, options) {
   begin_game(gid);
 }
 
+async function shuffle_player_order(gid) {
+  console.log("shuffling player order");
+  let res = await client.query("SELECT state FROM games WHERE gid = $1;", [gid]);
+  if(res.rows[0].state != 'pregame') {
+    return;
+  } 
+  res = await client.query("SELECT uid FROM users WHERE gid = $1;", [gid]);
+  let n = res.rows.length;
+  let order = shuffle([...Array(n).keys()]);
+  let player_order_update = new Array(n);
+  for(let i = 0;i < n; i++) {
+    player_order_update[i] = client.query("UPDATE users SET turn_order = $1 WHERE uid = $2;", 
+      [order[i], res.rows[i].uid]);
+  }
+  await Promise.all(player_order_update);
+  io.to(gid).emit("player join");
+}
+
 function receive_prompt(data) {
   client.query("UPDATE users SET player_action = $1 WHERE gid = $2 AND uid = $3;",
     [data.cid, data.gid, data.uid]).catch(e => {
@@ -411,6 +429,10 @@ io.on('connection', (socket) => {
     console.log("Received reset request");
     reset_game(data.gid);
     io.to(data.gid).emit("reset game");
+  });
+
+  socket.on("shuffle players", data => {
+    shuffle_player_order(data.gid);
   });
 
 });
