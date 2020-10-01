@@ -190,7 +190,7 @@ async function get_game_data(name) {
 }
 
 async function setup_cards(gid) {
-  await client.query("INSERT INTO cards(filename, gid) (SELECT filename, gid FROM default_cards INNER JOIN games ON $1 = gid);",
+  await client.query("INSERT INTO cards(filename, gid, artist) (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid);",
     [gid]);
 }
 
@@ -226,7 +226,7 @@ async function deal_cards(gid, to_deal) {
 }
 
 function broadcast_cards(gid, remaining_cards) {
-  client.query("SELECT cid, filename, uid, state FROM cards WHERE gid = $1 AND state = 'hand' OR state = 'table';", [gid])
+  client.query("SELECT cid, filename, uid, state, artist FROM cards WHERE gid = $1 AND state = 'hand' OR state = 'table';", [gid])
   .then(res => {
     console.log("sending deal message");
     console.log(res.rows);

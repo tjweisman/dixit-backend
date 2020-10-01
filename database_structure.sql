@@ -36,7 +36,8 @@ ALTER TABLE users ADD CONSTRAINT fk_game FOREIGN KEY(gid) REFERENCES games(gid)
 ON DELETE CASCADE;
 
 CREATE TABLE default_cards(
-	filename VARCHAR NOT NULL UNIQUE
+	filename VARCHAR NOT NULL UNIQUE,
+	artist VARCHAR
 );
 
 CREATE TYPE card_state AS ENUM ('deck', 'hand', 'table', 'discard');
@@ -44,6 +45,7 @@ CREATE TYPE card_state AS ENUM ('deck', 'hand', 'table', 'discard');
 CREATE TABLE cards(
 	cid SERIAL UNIQUE,
 	filename VARCHAR,
+	artist VARCHAR,
 	uid INTEGER,
 	gid INTEGER NOT NULL,
 	state card_state NOT NULL DEFAULT 'deck',
