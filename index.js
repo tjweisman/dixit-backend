@@ -135,6 +135,37 @@ async function user_can_join(user, game) {
   return join_status;
 }
 
+async function leave_game(socket, uid, gid) {
+  socket.leave(gid);
+
+  await client.query("DELETE from users WHERE uid = $1;", [uid]);
+  io.to(gid).emit("player join");
+
+  let remaining = await client.query("SELECT * FROM users WHERE gid = $1;", [gid]);
+  let num_players = remaining.rows.length;
+  let game_data = await get_gid_data(gid);
+  
+  if(game_data.state == "prompt" && game_data.turn == uid) {
+    begin_turn(gid, game_data.turn_index);
+  } else if(game_data.state == "secret") {
+    let players_ready = await receive_action({gid:gid, uid:uid, cid:null});
+    if(players_ready) {
+      start_guess_round(data.gid, data.turn, data.num_players);
+    }
+  } else if(game_data.state == "guess") {
+    let players_ready = await receive_action({gid:gid, uid:uid, cid:null});
+    if(players_ready) {
+      io.to(data.gid).emit("reveal guess", {});
+      deal_cards(data.gid, 1);
+      if(game_data.turn == uid) {
+        begin_turn(data.gid, turn_index);
+      } else {
+        advance_turn(gid);
+      }
+    }
+  }
+}
+
 function update_game_state(gid, state) {
   client.query("UPDATE games SET state = $1 WHERE gid = $2;",
     [state, gid]);
@@ -186,6 +217,11 @@ async function get_remaining_cards(gid) {
 
 async function get_game_data(name) {
   const res = await client.query("SELECT * FROM games WHERE name = $1;", [name]);
+  return res.rows[0];
+}
+
+async function get_gid_data(gid) {
+  const res = await client.query("SELECT * FROM games WHERE gid = $1;", [gid]);
   return res.rows[0];
 }
 
@@ -341,6 +377,14 @@ async function begin_turn(gid, turn_index) {
     });
 }
 
+function start_guess_round(gid, turn, num_players) {
+  update_game_state(gid, 'guess');
+  set_guesser_actions(gid, turn, 0);
+  io.to(gid).emit("round guess", {
+    order:shuffle([...Array(num_players).keys()])
+  });
+}
+
 async function get_users(gid, callback) {
   try {
       if(gid != 0) {
@@ -393,11 +437,7 @@ io.on('connection', (socket) => {
     io.to(data.gid).emit("other secret", data);
     let players_ready = await receive_action(data);
     if(players_ready) {
-      update_game_state(data.gid, 'guess');
-      set_guesser_actions(data.gid, data.turn, 0);
-      io.to(data.gid).emit("round guess", {
-        order:shuffle([...Array(data.num_players).keys()])
-      });
+      start_guess_round(data.gid, data.turn, data.num_players);
     }
   });
 
@@ -433,6 +473,10 @@ io.on('connection', (socket) => {
 
   socket.on("shuffle players", data => {
     shuffle_player_order(data.gid);
+  });
+
+  socket.on("leave game", data => {
+    leave_game(socket, data.uid, data.gid);
   });
 
 });
