@@ -26,6 +26,7 @@ CREATE TABLE games(
 	turn_index INTEGER DEFAULT 0,
 	state game_state DEFAULT 'pregame',
 	hand_size INTEGER DEFAULT 4,
+	equal_hands BOOLEAN DEFAULT TRUE,
 	prompt VARCHAR,
 	PRIMARY KEY(gid),
 

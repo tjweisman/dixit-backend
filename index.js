@@ -249,9 +249,17 @@ async function deal_cards(gid, to_deal) {
 
   name = await get_room_name(gid);
 
+  res = await client.query("SELECT equal_hands FROM games WHERE gid = $1;", [gid]);
+  let equal_hands = res.rows[0].equal_hands;
+
   res = await client.query("SELECT uid FROM users WHERE game = $1;", [name]);
   let num_users = res.rows.length;
   let counter = 0;
+
+  if(equal_hands && num_users > cards.length) {
+    return;
+  }
+
   let total_cards = Math.min(num_users * to_deal, cards.length);
   console.log("total cards = " + total_cards)
 
@@ -300,8 +308,11 @@ async function initialize_game(gid, options) {
   await client.query("DELETE FROM cards WHERE gid = $1", [gid]);
   await setup_cards(gid);
 
-  client.query("UPDATE games SET hand_size = $1 WHERE gid = $2;",
-    [options.hand_size, gid]);
+  console.log("options:");
+  console.log(options);
+
+  client.query("UPDATE games SET hand_size = $1, equal_hands = $2 WHERE gid = $3;",
+    [options.hand_size, options.equal_hands, gid]);
   
   deal_cards(gid, options.hand_size);
   begin_game(gid);
