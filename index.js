@@ -146,27 +146,18 @@ async function leave_game(socket, uid, gid) {
   await client.query("DELETE from users WHERE uid = $1;", [uid]);
   io.to(gid).emit("player join");
 
-  let remaining = await client.query("SELECT * FROM users WHERE gid = $1;", [gid]);
-  let num_players = remaining.rows.length;
   let game_data = await get_gid_data(gid);
   
-  if(game_data.state == "prompt" && game_data.turn == uid) {
-    begin_turn(gid, game_data.turn_index);
+  if(game_data.state == "prompt") {
+    begin_turn(gid);
   } else if(game_data.state == "secret") {
-    let players_ready = await receive_action({gid:gid, uid:uid, cid:null});
-    if(players_ready) {
-      start_guess_round(data.gid, data.turn, data.num_players);
+    if(await players_ready(gid)) {
+      start_guess_round(data.gid, data.turn);
     }
   } else if(game_data.state == "guess") {
-    let players_ready = await receive_action({gid:gid, uid:uid, cid:null});
-    if(players_ready) {
+    if(await players_ready(gid)) {
       io.to(data.gid).emit("reveal guess", {});
-      deal_cards(data.gid, 1);
-      if(game_data.turn == uid) {
-        begin_turn(data.gid, turn_index);
-      } else {
-        advance_turn(gid);
-      }
+      advance_turn(gid);
     }
   }
 }
@@ -238,7 +229,7 @@ async function setup_cards(gid) {
 function begin_game(gid) {
   client.query("UPDATE games SET state = 'prompt' WHERE gid = $1;",
     [gid]);
-  begin_turn(gid, 0);
+  begin_turn(gid);
   io.to(gid).emit('start game');
 }
 
@@ -290,18 +281,20 @@ function play_card(cid) {
   client.query("UPDATE cards SET state = 'table' WHERE cid = $1;", [cid]);
 }
 
-function reset_player_actions(gid) {
-  client.query("UPDATE users SET player_action = 0 WHERE gid = $1;", [gid]);
+function update_roster(gid) {
+  client.query("DELETE FROM users WHERE gid = $1 AND state = 'left' RETURNING uid;");
 }
 
-function set_guesser_actions(gid, turn, guesser_action) {
-  client.query("UPDATE users SET player_action = $3 WHERE gid = $1 AND uid != $2",
-    [gid, turn, guesser_action]);
+function update_player_states(gid, turn, turn_state, other_state) {
+  client.query("UPDATE users SET state = $1 WHERE gid = $2 AND uid != $3 AND state != 'left';", 
+    [other_state, gid, turn]);
+  client.query("UPDATE users SET state = $1 WHERE gid = $2 AND uid = $3;", 
+    [turn_state, gid, turn]); 
 }
 
 async function reset_game(gid) {
   client.query("UPDATE users SET score = 0 WHERE gid = $1;", [gid]);
-  client.query("UPDATE games SET state = 'pregame', turn_index = 0 WHERE gid = $1;", [gid]);
+  client.query("UPDATE games SET state = 'pregame' WHERE gid = $1;", [gid]);
 }
 
 async function initialize_game(gid, options) {
@@ -329,7 +322,7 @@ async function shuffle_player_order(gid) {
   let order = shuffle([...Array(n).keys()]);
   let player_order_update = new Array(n);
   for(let i = 0;i < n; i++) {
-    player_order_update[i] = client.query("UPDATE users SET turn_order = $1 WHERE uid = $2;", 
+    player_order_update[i] = client.query("UPDATE users SET turn_recency = $1, turn_order = $1 WHERE uid = $2;", 
       [order[i], res.rows[i].uid]);
   }
   await Promise.all(player_order_update);
@@ -337,13 +330,12 @@ async function shuffle_player_order(gid) {
 }
 
 function receive_prompt(data) {
-  client.query("UPDATE users SET player_action = $1 WHERE gid = $2 AND uid = $3;",
-    [data.cid, data.gid, data.uid]).catch(e => {
-      console.log(e.stack);
-    });
+  update_player_states(data.gid, data.uid, 'idle', 'wait');
   client.query("UPDATE games SET prompt = $1 WHERE gid = $2;",
     [data.prompt, data.gid]);
+
   play_card(data.cid);
+  update_game_state(data.gid, 'secret');
 }
 
 function shuffle(array) {
@@ -358,34 +350,42 @@ function shuffle(array) {
   return shuffled;
 }
 
-async function receive_action(data) {
-  await client.query("UPDATE users SET player_action = $1 WHERE gid = $2 AND uid = $3;",
-    [data.cid, data.gid, data.uid]);
+async function player_acts(gid, uid) {
+   await client.query("UPDATE users SET state = 'idle' WHERE gid = $1 AND uid = $2;",
+    [gid, uid]);
+}
 
-  res = await client.query("SELECT uid FROM users WHERE gid = $1 AND player_action = 0;",
-    [data.gid]);
+async function players_ready(gid) {
+  res = await client.query("SELECT uid FROM users WHERE gid = $1 AND state = 'wait';",
+    [gid]);
 
-  if(res.rows.length > 0) {
-    return false;
-  }
-  return true;
+  return (res.rows.length == 0);
 }
 
 async function advance_turn(gid) {
-  const res = await client.query("UPDATE games SET turn_index = turn_index + 1 WHERE gid = $1 RETURNING turn_index;", [gid]);
-  begin_turn(gid, res.rows[0].turn_index);
+  const res = await client.query("WITH updated AS (\
+    UPDATE users SET turn_recency = turn_recency + 1 WHERE gid = $1 RETURNING uid, turn_recency)\
+    SELECT * FROM updated ORDER BY turn_recency DESC;", [gid]);
+
+  deal_cards(gid, 1);
+
+  let turn_uid = res.rows[0].uid;
+  await client.query("UPDATE users SET turn_recency = 0 WHERE uid = $1;", [turn_uid]);
+
+  begin_turn(gid);
 }
 
-async function begin_turn(gid, turn_index) {
-  const res = await client.query("SELECT uid FROM users WHERE gid = $1 ORDER BY turn_order;", 
+async function begin_turn(gid) {
+  const res = await client.query("SELECT uid FROM users WHERE gid = $1 ORDER BY turn_recency DESC;", 
     [gid]);
 
   let num_users = res.rows.length;
-  let next_player = res.rows[turn_index % num_users].uid;
+  let next_player = res.rows[0].uid;
 
   client.query("UPDATE games SET turn = $1 WHERE gid = $2;", [next_player, gid]);
   client.query("UPDATE cards SET state = 'discard' WHERE gid = $1 AND state = 'table';", [gid]);
-  reset_player_actions(gid);
+
+  update_player_states(gid, next_player, 'wait', 'idle');
 
   update_game_state(gid, 'prompt');
   io.to(gid).emit('round prompt', {
@@ -393,11 +393,15 @@ async function begin_turn(gid, turn_index) {
     });
 }
 
-function start_guess_round(gid, turn, num_players) {
+async function start_guess_round(gid, turn) {
   update_game_state(gid, 'guess');
-  set_guesser_actions(gid, turn, 0);
+  update_player_states(gid, turn, 'idle', 'wait');
+
+  const res = await client.query("SELECT * FROM cards WHERE state = 'table' AND gid = $1", [gid]);
+  let num_cards = res.rows.length;
+
   io.to(gid).emit("round guess", {
-    order:shuffle([...Array(num_players).keys()])
+    order:shuffle([...Array(num_cards).keys()])
   });
 }
 
@@ -443,7 +447,7 @@ io.on('connection', (socket) => {
     console.log(data);
 
     receive_prompt(data);
-    update_game_state(data.gid, 'secret');
+    
     io.to(data.gid).emit("other prompt", data);
     callback();
   });
@@ -451,18 +455,18 @@ io.on('connection', (socket) => {
   socket.on("choose secret", async data => {
     play_card(data.cid);
     io.to(data.gid).emit("other secret", data);
-    let players_ready = await receive_action(data);
-    if(players_ready) {
-      start_guess_round(data.gid, data.turn, data.num_players);
+    await player_acts(data.gid, data.uid);
+    if(await players_ready(data.gid)) {
+      start_guess_round(data.gid, data.turn);
     }
   });
 
   socket.on("guess card", async data => {
     io.to(data.gid).emit("other guess", data);
-    let players_ready = await receive_action(data);
-    if(players_ready) {
+    await player_acts(data.gid, data.uid);
+    if(await players_ready(data.gid)) {
       io.to(data.gid).emit("reveal guess", {});
-      deal_cards(data.gid, 1);
+
       advance_turn(data.gid);
     }
   });

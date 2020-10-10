@@ -1,6 +1,8 @@
 DROP TABLE IF EXISTS users, games, cards, default_cards;
 
-DROP TYPE IF EXISTS card_state, game_state;
+DROP TYPE IF EXISTS card_state, game_state, player_state;
+
+CREATE TYPE player_state AS ENUM ('wait', 'idle', 'left', 'join');
 
 CREATE TABLE users(
 	
@@ -9,8 +11,9 @@ CREATE TABLE users(
 	game varchar(40) NOT NULL,
 	gid INTEGER,
 	score INTEGER DEFAULT 0,
+	turn_recency SERIAL,
 	turn_order SERIAL,
-	player_action INTEGER DEFAULT 0,
+	state player_state DEFAULT 'join',
 	session_id VARCHAR DEFAULT NUll,
 	PRIMARY KEY(uid),
 
@@ -23,7 +26,6 @@ CREATE TABLE games(
 	gid SERIAL UNIQUE,
 	name varchar(40) CONSTRAINT name_unique UNIQUE NOT NULL,
 	turn INTEGER,
-	turn_index INTEGER DEFAULT 0,
 	state game_state DEFAULT 'pregame',
 	hand_size INTEGER DEFAULT 4,
 	equal_hands BOOLEAN DEFAULT TRUE,
