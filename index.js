@@ -467,7 +467,6 @@ io.on('connection', (socket) => {
 
   socket.on("disconnect", (reason) => {
     console.log("client disconnected. reason: "+ reason);
-    client.query("UPDATE users SET socket = NULL WHERE socket = $1;", [socket.id]);
   });
 
   socket.on("reset game", data => {
