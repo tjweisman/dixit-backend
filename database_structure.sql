@@ -11,7 +11,7 @@ CREATE TABLE users(
 	score INTEGER DEFAULT 0,
 	turn_order SERIAL,
 	player_action INTEGER DEFAULT 0,
-	socket VARCHAR DEFAULT NUll,
+	session_id VARCHAR DEFAULT NUll,
 	PRIMARY KEY(uid),
 
 	CONSTRAINT user_game UNIQUE(name, game)

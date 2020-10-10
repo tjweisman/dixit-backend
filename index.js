@@ -4,6 +4,7 @@ const http = require('http').createServer(app);
 var io = require('socket.io')(http);
 
 const { Client } = require('pg');
+const { v4: uuidv4 } = require('uuid');
 
 const client = new Client({
   connectionString: process.env.DATABASE_URL,
@@ -30,13 +31,13 @@ function handle_generic_error(err, data, callback) {
 }
 
 
-async function join_game(socket, username, game, callback) {
+async function join_game(socket, username, game, session_id, callback) {
   var uid;
   var response_data = {
     username:username,
     game:game
   };
-  let join_status = await user_can_join(username, game);
+  let join_status = await user_can_join(username, game, session_id);
   if(!join_status.allowed) {
     response_data.response = "error";
     response_data.error = join_status.reason;
@@ -52,14 +53,18 @@ async function join_game(socket, username, game, callback) {
       [game, uid]).catch(err => {handle_generic_error(err, response_data, callback);});
     })
     .then(res => {
-      client.query("UPDATE users SET gid = $1, socket = $3 WHERE uid = $2;",
-        [res.rows[0].gid, uid, socket.id]).catch(err => {handle_generic_error(err, response_data, callback);});
+
+      let session_id = uuidv4();
+
+      client.query("UPDATE users SET gid = $1, session_id = $3 WHERE uid = $2;",
+        [res.rows[0].gid, uid, session_id]).catch(err => {handle_generic_error(err, response_data, callback);});
 
       socket.join(res.rows[0].gid);
 
       response_data.response = "success";
       response_data.uid = uid;
       response_data.gid = res.rows[0].gid;
+      response_data.session_id = session_id;
       response_data.game_data = {
         state:res.rows[0].state
       }
@@ -90,12 +95,12 @@ async function rejoin_user(socket, username, game, callback) {
     game:game
   };
 
-  const res = await client.query("UPDATE users SET socket = $1 WHERE name = $2 RETURNING uid;", 
-    [socket.id, username]);
-  uid = res.rows[0].uid;
+  const res = await client.query("SELECT uid, session_id FROM users WHERE name = $1;", 
+    [username]);
 
   game_data = await get_game_data(game);
-  response_data.uid = uid;
+  response_data.uid = res.rows[0].uid;
+  response_data.session_id = res.rows[0].session_id;
   response_data.gid = game_data.gid;
   response_data.game_data = game_data;
 
@@ -103,7 +108,7 @@ async function rejoin_user(socket, username, game, callback) {
   callback(response_data);
 }
 
-async function user_can_join(user, game) {
+async function user_can_join(user, game, session_id) {
   let game_data = await get_game_data(game);
   let join_status = {
     allowed:true
@@ -124,10 +129,10 @@ async function user_can_join(user, game) {
   } else if(res.rows.length == 0) {
     return join_status;
   }
-  console.log("socket: ");
-  console.log(res.rows[0].socket);
-  if(res.rows[0].socket) {
-    console.log("socket was not null.");
+  console.log("session id: ");
+  console.log(res.rows[0].session_id);
+  if(res.rows[0].session_id != session_id) {
+    console.log("session ids do not match");
     join_status.allowed = false;
     join_status.reason = "user_connected";
     return join_status;
@@ -407,7 +412,7 @@ io.on('connection', (socket) => {
     console.log("User wants to join game.");
 		console.log(data);
 
-    join_game(socket, data["username"], data["game"], callback);
+    join_game(socket, data.username, data.game, data.session_id, callback);
 	});
 
   socket.on("delete all", () => {
