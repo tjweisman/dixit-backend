@@ -14,6 +14,7 @@ CREATE TABLE users(
 	turn_recency SERIAL,
 	turn_order SERIAL,
 	state player_state DEFAULT 'join',
+	guess INTEGER,
 	session_id VARCHAR DEFAULT NUll,
 	PRIMARY KEY(uid),
 

@@ -23,11 +23,88 @@ http.listen(PORT, () => {
 	console.log("listening...");
 });
 
+function report_server_error(err, gid, data) {
+  console.log(err.stack);
+  io.to(gid).emit("server error", data);
+}
+
+function report_sql_error(err, gid) {
+  report_server_error(err, gid, {type:"SQL"});
+}
+
 function handle_generic_error(err, data, callback) {
   console.log(err.stack);
   data.response = "error";
   data.error = "unknown";
   callback(data);
+}
+
+function add_new_user_to_game(socket, uid, username, game_data, callback) {
+  let response_data = {
+    response:"success",
+    username:username,
+    game:game_data.name
+  };
+
+  let session_id = uuidv4();
+
+  let player_state = "idle";
+  if(game_data.state == "secret" || game_data.state == "guess") {
+    player_state = "wait";
+  }
+
+  client.query("UPDATE users SET gid = $1, session_id = $3, state = $4 WHERE uid = $2;",
+    [game_data.gid, uid, session_id, player_state])
+  .catch(err => {handle_generic_error(err, response_data, callback);});
+
+  socket.join(game_data.gid);
+
+  response_data.response = "success";
+  response_data.uid = uid;
+  response_data.gid = game_data.gid;
+  response_data.session_id = session_id;
+  response_data.game_data = game_data;
+
+  fix_recencies(game_data.gid, game_data.turn);
+
+  if(game_data.state == "prompt" || game_data.state == "secret") {
+    deal_single_player(game_data.gid, uid, game_data.hand_size);
+  } else if(game_data.state == "guess") {
+    deal_single_player(game_data.gid, uid, game_data.hand_size - 1);
+  }
+
+  callback(response_data);
+  socket.to(game_data.gid).emit("player update");
+
+
+  console.log("new user " + username + " joined game "+ game_data.name);
+}
+
+async function user_rejoin_game(socket, username, game_data, callback) {
+  response_data = {
+    response:"success",
+    username:username,
+    game:game_data.name
+  }
+
+  const res = await client.query("SELECT uid, session_id FROM users WHERE name = $1;", 
+    [username]);
+
+  response_data.uid = res.rows[0].uid;
+  response_data.session_id = res.rows[0].session_id;
+  response_data.gid = game_data.gid;
+  response_data.game_data = game_data;
+
+  let player_state = "idle";
+
+  if(game_data.state == "guess" || game_data.state == "secret") {
+    player_state = "wait";
+  }
+  await client.query("UPDATE users SET state = $1 WHERE uid = $2;", 
+    [player_state, res.rows[0].uid]);
+
+  socket.join(game_data.gid);
+  callback(response_data);
 }
 
 
@@ -49,64 +126,29 @@ async function join_game(socket, username, game, session_id, callback) {
     .then(async res => {
       uid = res.rows[0].uid;
       return await client.query("INSERT INTO games(name, turn) VALUES($1, $2) \
-      ON CONFLICT ON CONSTRAINT name_unique DO UPDATE SET name = EXCLUDED.name RETURNING gid, state;",
+      ON CONFLICT ON CONSTRAINT name_unique DO UPDATE SET name = EXCLUDED.name RETURNING *;",
       [game, uid]).catch(err => {handle_generic_error(err, response_data, callback);});
     })
     .then(res => {
-
-      let session_id = uuidv4();
-
-      client.query("UPDATE users SET gid = $1, session_id = $3 WHERE uid = $2;",
-        [res.rows[0].gid, uid, session_id]).catch(err => {handle_generic_error(err, response_data, callback);});
-
-      socket.join(res.rows[0].gid);
-
-      response_data.response = "success";
-      response_data.uid = uid;
-      response_data.gid = res.rows[0].gid;
-      response_data.session_id = session_id;
-      response_data.game_data = {
-        state:res.rows[0].state
-      }
-
-      callback(response_data);
-      socket.to(res.rows[0].gid).emit("player join");
-
-
-      console.log("new user " + username + " joined game "+ game);
-    }).catch(err => {
+      add_new_user_to_game(socket, uid, username, res.rows[0], callback);
+    }).catch(async err => {
       if(err.code == 23505 && err.constraint == "user_game") {
+        let game_data = await get_game_data(game);
+        let user_data = await get_user_data(username);
 
-        console.log("user " + username + " rejoined game " + game);
-        rejoin_user(socket, username, game, callback);
-
-        //response_data.response = "error";
-        //response_data.error = "user_in_game";
+        if(user_data.state == "left") {
+          console.log("added previously left user " + username + " to game");
+          add_new_user_to_game(socket, user_data.uid, username, game_data, callback);
+        } else {
+          console.log("user " + username + " rejoined game " + game);
+          user_rejoin_game(socket, username, game_data, callback);
+        }
       } else {
         handle_generic_error(err, response_data, callback);
       }
     });
 }
-
-async function rejoin_user(socket, username, game, callback) {
-  let response_data = {
-    response:"success",
-    username:username,
-    game:game
-  };
-
-  const res = await client.query("SELECT uid, session_id FROM users WHERE name = $1;", 
-    [username]);
-
-  game_data = await get_game_data(game);
-  response_data.uid = res.rows[0].uid;
-  response_data.session_id = res.rows[0].session_id;
-  response_data.gid = game_data.gid;
-  response_data.game_data = game_data;
-
-  socket.join(game_data.gid);
-  callback(response_data);
-}
+  
 
 async function user_can_join(user, game, session_id) {
   let game_data = await get_game_data(game);
@@ -118,33 +160,32 @@ async function user_can_join(user, game, session_id) {
   if(!game_data) {
     return join_status;
   }
-  let res = await client.query("SELECT * FROM users WHERE gid = $1 AND name = $2;",
+  let res = await client.query("SELECT * FROM users WHERE gid = $1 AND name = $2 AND state != 'left';",
     [game_data.gid, user]);
 
-  //the game has started and the user doesn't already exist: can't join
-  if(!(game_data.state == "pregame") && res.rows.length == 0) {
-    join_status.allowed = false;
-    join_status.reason = "in_progress"
-    return join_status;
-  } else if(res.rows.length == 0) {
+  if(res.rows.length == 0) {
     return join_status;
   }
   console.log("session id: ");
   console.log(res.rows[0].session_id);
-  if(res.rows[0].session_id != session_id) {
+  if(res.rows[0].session_id != session_id && res.rows[0].state != "left") {
     console.log("session ids do not match");
     join_status.allowed = false;
     join_status.reason = "user_connected";
     return join_status;
   }
+
+  //user exists already, but we can rejoin
   return join_status;
 }
 
 async function leave_game(socket, uid, gid) {
   socket.leave(gid);
 
-  await client.query("DELETE from users WHERE uid = $1;", [uid]);
-  io.to(gid).emit("player join");
+  await client.query("UPDATE users SET state = 'left' WHERE uid = $1;", [uid]);
+  io.to(gid).emit("player update");
+
+  client.query("UPDATE cards SET state = 'deck', uid = NULL WHERE uid = $1 AND state = 'hand';", [uid]);
 
   let game_data = await get_gid_data(gid);
   
@@ -152,11 +193,11 @@ async function leave_game(socket, uid, gid) {
     begin_turn(gid);
   } else if(game_data.state == "secret") {
     if(await players_ready(gid)) {
-      start_guess_round(data.gid, data.turn);
+      start_guess_round(game_data.gid, game_data.turn);
     }
   } else if(game_data.state == "guess") {
     if(await players_ready(gid)) {
-      io.to(data.gid).emit("reveal guess", {});
+      io.to(game_data.gid).emit("reveal guess", {});
       advance_turn(gid);
     }
   }
@@ -164,16 +205,16 @@ async function leave_game(socket, uid, gid) {
 
 function update_game_state(gid, state) {
   client.query("UPDATE games SET state = $1 WHERE gid = $2;",
-    [state, gid]);
+    [state, gid]).catch((err) => report_sql_error(err, gid));
 }
 
 function update_score(uid, score) {
   client.query("UPDATE users SET score = $1 WHERE uid = $2;",
-    [score, uid]);
+    [score, uid]).catch((err) => report_sql_error(err, gid));
 }
 
 function delete_all_data() {
-  client.query("DELETE FROM games;");
+  client.query("DELETE FROM games;").catch((err) => report_sql_error(err, gid));
 }
 
 async function get_room_id(room) {
@@ -216,6 +257,11 @@ async function get_game_data(name) {
   return res.rows[0];
 }
 
+async function get_user_data(username) {
+  const res = await client.query("SELECT * FROM users WHERE name = $1;", [username]);
+  return res.rows[0];
+}
+
 async function get_gid_data(gid) {
   const res = await client.query("SELECT * FROM games WHERE gid = $1;", [gid]);
   return res.rows[0];
@@ -234,7 +280,6 @@ function begin_game(gid) {
 }
 
 async function deal_cards(gid, to_deal) {
-
   let res = await client.query("SELECT cid, filename FROM cards WHERE gid = $1 AND state='deck' ORDER BY random();", [gid]);
   cards = res.rows;
 
@@ -243,7 +288,7 @@ async function deal_cards(gid, to_deal) {
   res = await client.query("SELECT equal_hands FROM games WHERE gid = $1;", [gid]);
   let equal_hands = res.rows[0].equal_hands;
 
-  res = await client.query("SELECT uid FROM users WHERE game = $1;", [name]);
+  res = await client.query("SELECT uid, name FROM users WHERE game = $1 AND state != 'left';", [name]);
   let num_users = res.rows.length;
   let counter = 0;
 
@@ -265,6 +310,17 @@ async function deal_cards(gid, to_deal) {
   broadcast_cards(gid, remaining_cards);
 }
 
+async function deal_single_player(gid, uid, to_deal) {
+  let res = await client.query("WITH added_cards AS (\
+    SELECT cid FROM cards WHERE gid = $1 AND state='deck' ORDER BY random() LIMIT $2\
+    ) UPDATE cards SET state = 'hand', uid = $3 FROM added_cards WHERE cards.cid = added_cards.cid;", 
+    [gid, to_deal, uid]);
+
+  res = await client.query("SELECT * FROM cards WHERE gid = $1 AND state = 'deck';", [gid]);
+
+  broadcast_cards(gid, res.rows.length);
+}
+
 function broadcast_cards(gid, remaining_cards) {
   client.query("SELECT cid, filename, uid, state, artist FROM cards WHERE gid = $1 AND state = 'hand' OR state = 'table';", [gid])
   .then(res => {
@@ -281,6 +337,10 @@ function play_card(cid) {
   client.query("UPDATE cards SET state = 'table' WHERE cid = $1;", [cid]);
 }
 
+function guess_card(uid, cid) {
+  client.query("UPDATE users SET guess = $1 WHERE uid = $2;", [cid, uid]);
+}
+
 function update_roster(gid) {
   client.query("DELETE FROM users WHERE gid = $1 AND state = 'left' RETURNING uid;");
 }
@@ -288,24 +348,25 @@ function update_roster(gid) {
 function update_player_states(gid, turn, turn_state, other_state) {
   client.query("UPDATE users SET state = $1 WHERE gid = $2 AND uid != $3 AND state != 'left';", 
     [other_state, gid, turn]);
-  client.query("UPDATE users SET state = $1 WHERE gid = $2 AND uid = $3;", 
+  client.query("UPDATE users SET state = $1 WHERE gid = $2 AND uid = $3 AND state != 'left';", 
     [turn_state, gid, turn]); 
 }
 
 async function reset_game(gid) {
-  client.query("UPDATE users SET score = 0 WHERE gid = $1;", [gid]);
+  client.query("UPDATE users SET score = 0, state = 'join', guess = NULL WHERE gid = $1;", [gid]);
   client.query("UPDATE games SET state = 'pregame' WHERE gid = $1;", [gid]);
 }
 
 async function initialize_game(gid, options) {
+  console.log("options:");
+  console.log(options);
+  client.query("UPDATE games SET hand_size = $1, equal_hands = $2 WHERE gid = $3;",
+    [options.hand_size, options.equal_hands, gid]);
+
   await client.query("DELETE FROM cards WHERE gid = $1", [gid]);
   await setup_cards(gid);
 
-  console.log("options:");
-  console.log(options);
-
-  client.query("UPDATE games SET hand_size = $1, equal_hands = $2 WHERE gid = $3;",
-    [options.hand_size, options.equal_hands, gid]);
+  await fix_recencies(gid);
   
   deal_cards(gid, options.hand_size);
   begin_game(gid);
@@ -317,16 +378,16 @@ async function shuffle_player_order(gid) {
   if(res.rows[0].state != 'pregame') {
     return;
   } 
-  res = await client.query("SELECT uid FROM users WHERE gid = $1;", [gid]);
+  res = await client.query("SELECT uid FROM users WHERE gid = $1 AND state != 'left';", [gid]);
   let n = res.rows.length;
   let order = shuffle([...Array(n).keys()]);
   let player_order_update = new Array(n);
   for(let i = 0;i < n; i++) {
-    player_order_update[i] = client.query("UPDATE users SET turn_recency = $1, turn_order = $1 WHERE uid = $2;", 
-      [order[i], res.rows[i].uid]);
+    player_order_update[i] = client.query("UPDATE users SET turn_recency = $1, turn_order = $2 WHERE uid = $3;", 
+      [(2*n - order[i] - 1) % n, order[i], res.rows[i].uid]);
   }
   await Promise.all(player_order_update);
-  io.to(gid).emit("player join");
+  io.to(gid).emit("player update");
 }
 
 function receive_prompt(data) {
@@ -351,7 +412,7 @@ function shuffle(array) {
 }
 
 async function player_acts(gid, uid) {
-   await client.query("UPDATE users SET state = 'idle' WHERE gid = $1 AND uid = $2;",
+   await client.query("UPDATE users SET state = 'idle' WHERE gid = $1 AND uid = $2 AND state != 'left';",
     [gid, uid]);
 }
 
@@ -362,9 +423,30 @@ async function players_ready(gid) {
   return (res.rows.length == 0);
 }
 
+async function fix_recencies(gid, turn) {
+  let res = await client.query("SELECT uid FROM users WHERE gid = $1 AND state != 'left' ORDER BY turn_order DESC;",
+    [gid]);
+  let num_players = res.rows.length;
+  console.log("Fixing recencies");
+  console.log(res);
+  let turn_index = num_players - 1;
+  if(turn) {
+    turn_index = res.rows.findIndex((user) => {return user.uid == turn;});
+  }
+
+  for(let i = 0;i < num_players;i++) {
+    client.query("UPDATE users SET turn_recency = $1 WHERE uid = $2;", 
+      [((i - turn_index - 1) % num_players + num_players) % num_players, 
+      res.rows[i].uid]);
+  }
+}
+
 async function advance_turn(gid) {
+
+  await client.query("DELETE FROM users WHERE gid = $1 AND state = 'left';", [gid]);
+
   const res = await client.query("WITH updated AS (\
-    UPDATE users SET turn_recency = turn_recency + 1 WHERE gid = $1 RETURNING uid, turn_recency)\
+    UPDATE users SET turn_recency = turn_recency + 1, guess = NULL WHERE gid = $1 RETURNING uid, turn_recency)\
     SELECT * FROM updated ORDER BY turn_recency DESC;", [gid]);
 
   deal_cards(gid, 1);
@@ -376,7 +458,7 @@ async function advance_turn(gid) {
 }
 
 async function begin_turn(gid) {
-  const res = await client.query("SELECT uid FROM users WHERE gid = $1 ORDER BY turn_recency DESC;", 
+  const res = await client.query("SELECT uid FROM users WHERE gid = $1 AND state != 'left' ORDER BY turn_recency DESC;", 
     [gid]);
 
   let num_users = res.rows.length;
@@ -462,11 +544,11 @@ io.on('connection', (socket) => {
   });
 
   socket.on("guess card", async data => {
+    guess_card(data.uid, data.cid);
     io.to(data.gid).emit("other guess", data);
     await player_acts(data.gid, data.uid);
     if(await players_ready(data.gid)) {
       io.to(data.gid).emit("reveal guess", {});
-
       advance_turn(data.gid);
     }
   });
