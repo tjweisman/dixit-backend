@@ -353,6 +353,7 @@ function update_player_states(gid, turn, turn_state, other_state) {
 }
 
 async function reset_game(gid) {
+  client.query("DELETE FROM users WHERE gid = $1 AND state = 'left';", [gid]);
   client.query("UPDATE users SET score = 0, state = 'join', guess = NULL WHERE gid = $1;", [gid]);
   client.query("UPDATE games SET state = 'pregame' WHERE gid = $1;", [gid]);
 }
