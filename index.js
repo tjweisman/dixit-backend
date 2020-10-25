@@ -85,7 +85,7 @@ function add_new_user_to_game(socket, uid, username, session_id, game_data, call
 async function user_rejoin_game(socket, user_data, game_data, callback) {
   response_data = {
     response:"success",
-    username:username,
+    username:user_data.username,
     game:game_data.name,
     uid:user_data.uid,
     session_id:user_data.session_id,
