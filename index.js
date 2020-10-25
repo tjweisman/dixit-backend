@@ -252,9 +252,16 @@ async function get_gid_data(gid) {
   return res.rows[0];
 }
 
-async function setup_cards(gid) {
-  await client.query("INSERT INTO cards(filename, gid, artist) (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid);",
-    [gid]);
+async function setup_cards(gid, limit) {
+  if(limit == -1) {
+    await client.query("INSERT INTO cards(filename, gid, artist) \
+      (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid);",
+      [gid]);
+  } else {
+    await client.query("INSERT INTO cards(filename, gid, artist) \
+      (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid ORDER BY random() LIMIT $2);",
+      [gid, limit]);
+  }
 }
 
 function begin_game(gid) {
@@ -346,11 +353,17 @@ async function reset_game(gid) {
 async function initialize_game(gid, options) {
   console.log("options:");
   console.log(options);
+
+  let deck_limit = -1;
+  if(options.deck_limit_on) {
+    deck_limit = options.deck_limit;
+  }
+
   client.query("UPDATE games SET hand_size = $1, equal_hands = $2 WHERE gid = $3;",
     [options.hand_size, options.equal_hands, gid]);
 
   await client.query("DELETE FROM cards WHERE gid = $1", [gid]);
-  await setup_cards(gid);
+  await setup_cards(gid, deck_limit);
 
   await fix_recencies(gid);
   
