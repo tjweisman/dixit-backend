@@ -39,14 +39,16 @@ function handle_generic_error(err, data, callback) {
   callback(data);
 }
 
-function add_new_user_to_game(socket, uid, username, game_data, callback) {
+function add_new_user_to_game(socket, uid, username, session_id, game_data, callback) {
   let response_data = {
     response:"success",
     username:username,
     game:game_data.name
   };
 
-  let session_id = uuidv4();
+  if(!session_id) {
+    session_id = uuidv4();
+  }
 
   let player_state = "idle";
   if(game_data.state == "secret" || game_data.state == "guess") {
@@ -80,28 +82,16 @@ function add_new_user_to_game(socket, uid, username, game_data, callback) {
   console.log("new user " + username + " joined game "+ game_data.name);
 }
 
-async function user_rejoin_game(socket, username, game_data, callback) {
+async function user_rejoin_game(socket, user_data, game_data, callback) {
   response_data = {
     response:"success",
     username:username,
-    game:game_data.name
+    game:game_data.name,
+    uid:user_data.uid,
+    session_id:user_data.session_id,
+    gid:game_data.gid,
+    game_data:game_data
   }
-
-  const res = await client.query("SELECT uid, session_id FROM users WHERE name = $1;", 
-    [username]);
-
-  response_data.uid = res.rows[0].uid;
-  response_data.session_id = res.rows[0].session_id;
-  response_data.gid = game_data.gid;
-  response_data.game_data = game_data;
-
-  let player_state = "idle";
-
-  if(game_data.state == "guess" || game_data.state == "secret") {
-    player_state = "wait";
-  }
-  await client.query("UPDATE users SET state = $1 WHERE uid = $2;", 
-    [player_state, res.rows[0].uid]);
 
   socket.join(game_data.gid);
   callback(response_data);
@@ -130,25 +120,24 @@ async function join_game(socket, username, game, session_id, callback) {
       [game, uid]).catch(err => {handle_generic_error(err, response_data, callback);});
     })
     .then(res => {
-      add_new_user_to_game(socket, uid, username, res.rows[0], callback);
+      add_new_user_to_game(socket, uid, username, session_id, res.rows[0], callback);
     }).catch(async err => {
       if(err.code == 23505 && err.constraint == "user_game") {
         let game_data = await get_game_data(game);
-        let user_data = await get_user_data(username);
+        let user_data = await get_user_data(username, game_data.gid);
 
         if(user_data.state == "left") {
           console.log("added previously left user " + username + " to game");
-          add_new_user_to_game(socket, user_data.uid, username, game_data, callback);
+          add_new_user_to_game(socket, user_data.uid, username, session_id, game_data, callback);
         } else {
           console.log("user " + username + " rejoined game " + game);
-          user_rejoin_game(socket, username, game_data, callback);
+          user_rejoin_game(socket, user_data, game_data, callback);
         }
       } else {
         handle_generic_error(err, response_data, callback);
       }
     });
 }
-  
 
 async function user_can_join(user, game, session_id) {
   let game_data = await get_game_data(game);
@@ -168,7 +157,7 @@ async function user_can_join(user, game, session_id) {
   }
   console.log("session id: ");
   console.log(res.rows[0].session_id);
-  if(res.rows[0].session_id != session_id && res.rows[0].state != "left") {
+  if(res.rows[0].session_id && res.rows[0].session_id != session_id && res.rows[0].state != "left") {
     console.log("session ids do not match");
     join_status.allowed = false;
     join_status.reason = "user_connected";
@@ -240,11 +229,6 @@ async function get_username(uid) {
   return res.rows[0].name;
 }
 
-async function get_uid(username) {
-  const res = await client.query("SELECT uid FROM users WHERE name = $1;", [username]);
-  return res.rows[0].uid;
-}
-
 async function get_remaining_cards(gid) {
   const res = await client.query("SELECT * FROM cards WHERE gid = $1 AND state = 'deck';",
     [gid]);
@@ -257,8 +241,9 @@ async function get_game_data(name) {
   return res.rows[0];
 }
 
-async function get_user_data(username) {
-  const res = await client.query("SELECT * FROM users WHERE name = $1;", [username]);
+async function get_user_data(username, gid) {
+  const res = await client.query("SELECT * FROM users WHERE name = $1 AND gid = $2;", 
+    [username, gid]);
   return res.rows[0];
 }
 
