@@ -197,6 +197,11 @@ async function leave_game(socket, uid, gid) {
       advance_turn(gid);
     }
   }
+
+  let res = await client.query("SELECT * FROM users WHERE gid = $1 AND state != 'left';", [gid]);
+  if(res.rows.length == 0) {
+    delete_game(gid);
+  }
 }
 
 function update_game_state(gid, state) {
