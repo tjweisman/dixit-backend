@@ -448,10 +448,72 @@ async function fix_recencies(gid, turn) {
   }
 }
 
+async function update_scores(gid) {
+
+  //these three could be wrapped into a single promise rather than done sequentially but *shrug*
+  let res = await client.query("SELECT * FROM cards WHERE gid = $1 AND state = 'table';", [gid]);
+
+  let played_cards = new Map();
+  for (let card of res.rows) {
+    played_cards.set(card.cid, card);
+  }
+
+  res = await client.query("SELECT * FROM users WHERE gid = $1;", [gid]);
+  let players = res.rows;
+
+  let game_data = await get_gid_data(gid);
+
+  let all_correct = true;
+  let all_incorrect = true;
+  let provisional_point_changes = new Map();
+  let point_changes = new Map();
+  for (let player of players) {
+    provisional_point_changes.set(player.uid, 0);
+    point_changes.set(player.uid, 0);
+  }
+
+  for (let player of players) {
+    if(player == game_data.turn || !player.guess) {
+      continue;
+    }
+    let opp_uid = played_cards.get(player.guess).uid;
+    if(opp_uid == game_data.turn) {
+      provisional_point_changes.set(player.uid, 3);
+      all_incorrect = false;
+    } else {
+      point_changes.set(opp_uid, point_changes.get(opp_uid) + 1);
+      all_correct = false;
+    }
+  }
+  provisional_point_changes.set(game_data.turn, 3);
+
+  let score_updates = new Array();
+  for (let player of players) {
+    score_updates.push(
+      new Promise((resolve, reject) => {
+        let point_change = point_changes.get(player.uid);
+        if(!all_correct && !all_incorrect) {
+          point_change += provisional_point_changes.get(player.uid);
+        } else if(player.uid != game_data.turn) {
+          point_change += 2
+        }
+        resolve(client.query("UPDATE users SET score = score + $1 WHERE uid = $2;",
+            [point_change, player.uid]));
+    }));
+  }
+  await Promise.all(score_updates);
+}
+
 async function advance_turn(gid) {
+
+  await update_scores(gid);
 
   await client.query("DELETE FROM users WHERE gid = $1 AND state = 'left';", [gid]);
 
+  client.query("SELECT * FROM users WHERE gid = $1;", [gid]).then((res) => {
+    io.to(gid).emit("end turn", res.rows);
+  });
+  
   let game_ended = await check_game_end(gid);
 
   if(game_ended) {
@@ -467,6 +529,7 @@ async function advance_turn(gid) {
 
   let turn_uid = res.rows[0].uid;
   await client.query("UPDATE users SET turn_recency = 0 WHERE uid = $1;", [turn_uid]);
+
 
   begin_turn(gid);
 }
@@ -588,14 +651,13 @@ io.on('connection', (socket) => {
     io.to(data.gid).emit("other guess", data);
     await player_acts(data.gid, data.uid);
     if(await players_ready(data.gid)) {
-      io.to(data.gid).emit("reveal guess", {});
       advance_turn(data.gid);
     }
   });
 
-  socket.on("score update", data => {
+  /*socket.on("score update", data => {
     update_score(data.uid, data.score);
-  });
+  });*/
 
   socket.on("get cards", async data => {
     num_remaining = await get_remaining_cards(data.gid);
