@@ -586,6 +586,11 @@ async function end_game(gid) {
   io.to(gid).emit("end game", data);
 }
 
+function delete_game(gid) {
+  client.query("DELETE FROM games WHERE gid = $1;", [gid]);
+  io.to(gid).emit("delete game");
+}
+
 async function check_game_end(gid) {
 
   //this is super naive but let's run with it
@@ -680,6 +685,11 @@ io.on('connection', (socket) => {
 
   socket.on("leave game", data => {
     leave_game(socket, data.uid, data.gid);
+  });
+
+  socket.on("delete game", data => {
+    console.log("Received delete request");
+    delete_game(data.gid);
   });
 
 });
