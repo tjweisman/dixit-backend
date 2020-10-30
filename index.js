@@ -149,6 +149,13 @@ async function user_can_join(user, game, session_id) {
   if(!game_data) {
     return join_status;
   }
+
+  if(game_data.game_state == "end") {
+    join_status.allowed = false;
+    join_status.reason = "game_ended";
+    return join_status;
+  }
+
   let res = await client.query("SELECT * FROM users WHERE gid = $1 AND name = $2 AND state != 'left';",
     [game_data.gid, user]);
 
@@ -284,8 +291,8 @@ async function deal_cards(gid, to_deal) {
   let num_users = res.rows.length;
   let counter = 0;
 
-  if(equal_hands && num_users > cards.length) {
-    return;
+  if(equal_hands && num_users > cards.length || cards.length == 0) {
+    return false;
   }
 
   let total_cards = Math.min(num_users * to_deal, cards.length);
@@ -300,6 +307,7 @@ async function deal_cards(gid, to_deal) {
   let remaining_cards = cards.length - counter;
   await Promise.all(hand_updates);
   broadcast_cards(gid, remaining_cards);
+  return true;
 }
 
 async function deal_single_player(gid, uid, to_deal) {
@@ -444,11 +452,18 @@ async function advance_turn(gid) {
 
   await client.query("DELETE FROM users WHERE gid = $1 AND state = 'left';", [gid]);
 
+  let game_ended = await check_game_end(gid);
+
+  if(game_ended) {
+    end_game(gid);
+    return;
+  }
+
   const res = await client.query("WITH updated AS (\
     UPDATE users SET turn_recency = turn_recency + 1, guess = NULL WHERE gid = $1 RETURNING uid, turn_recency)\
     SELECT * FROM updated ORDER BY turn_recency DESC;", [gid]);
 
-  deal_cards(gid, 1);
+  deal_cards(gid, 1);  
 
   let turn_uid = res.rows[0].uid;
   await client.query("UPDATE users SET turn_recency = 0 WHERE uid = $1;", [turn_uid]);
@@ -497,6 +512,32 @@ async function get_users(gid, callback) {
   } catch(err) {
     console.log(err.stack);
   }
+}
+
+async function end_game(gid) {
+  update_game_state(gid, "end");
+  const res = await client.query("SELECT * FROM users WHERE score = (SELECT MAX(score) FROM users);");
+  let data = {
+    winners:res.rows
+  };
+  io.to(gid).emit("end game", data);
+}
+
+async function check_game_end(gid) {
+
+  //this is super naive but let's run with it
+
+  let res = await client.query("SELECT * FROM cards WHERE gid = $1 AND state = 'hand';", [gid]);
+  let num_cards = res.rows.length;
+
+  res = await client.query("SELECT * FROM users WHERE gid = $1 AND state != 'left';", [gid]);
+  let num_users = res.rows.length;
+
+  if(num_users > num_cards) {
+    return true;
+  }
+
+  return false;
 }
 
 io.set('transports', ['websocket']);

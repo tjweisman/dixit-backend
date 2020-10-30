@@ -21,7 +21,7 @@ CREATE TABLE users(
 	CONSTRAINT user_game UNIQUE(name, game)
 );
 
-CREATE TYPE game_state AS ENUM ('pregame', 'prompt', 'secret', 'guess');
+CREATE TYPE game_state AS ENUM ('pregame', 'prompt', 'secret', 'guess', 'end');
 
 CREATE TABLE games(
 	gid SERIAL UNIQUE,
