@@ -264,15 +264,15 @@ async function get_gid_data(gid) {
   return res.rows[0];
 }
 
-async function setup_cards(gid, limit) {
+async function setup_cards(gid, limit, artists) {
   if(limit == -1) {
     await client.query("INSERT INTO cards(filename, gid, artist) \
-      (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid);",
-      [gid]);
+      (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid WHERE artist = ANY($2));",
+      [gid, artists]).catch(err => handle_generic_error(err));
   } else {
     await client.query("INSERT INTO cards(filename, gid, artist) \
-      (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid ORDER BY random() LIMIT $2);",
-      [gid, limit]);
+      (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid WHERE artist = ANY($3) ORDER BY random() LIMIT $2);",
+      [gid, limit, artists]);
   }
 }
 
@@ -376,7 +376,7 @@ async function initialize_game(gid, options) {
     [options.hand_size, options.equal_hands, gid]);
 
   await client.query("DELETE FROM cards WHERE gid = $1", [gid]);
-  await setup_cards(gid, deck_limit);
+  await setup_cards(gid, deck_limit, options.artists);
 
   await fix_recencies(gid);
   
@@ -613,6 +613,13 @@ async function check_game_end(gid) {
   return false;
 }
 
+function retrieve_artists(data, callback) {
+  client.query("SELECT DISTINCT artist FROM default_cards ORDER BY artist;").then(
+    res => {
+      callback(res.rows);
+  }).catch(err => report_sql_error(err, data.gid));
+}
+
 io.set('transports', ['websocket']);
 
 io.on('connection', (socket) => {
@@ -695,6 +702,10 @@ io.on('connection', (socket) => {
   socket.on("delete game", data => {
     console.log("Received delete request");
     delete_game(data.gid);
+  });
+
+  socket.on("get artists", (data, callback) => {
+    retrieve_artists(data, callback);
   });
 
 });
