@@ -544,6 +544,11 @@ async function begin_turn(gid) {
     [gid]);
 
   let num_users = res.rows.length;
+
+  if(num_users < 1) {
+    return;
+  }
+
   let next_player = res.rows[0].uid;
 
   client.query("UPDATE games SET turn = $1 WHERE gid = $2;", [next_player, gid]);
