@@ -280,7 +280,10 @@ function begin_game(gid) {
   client.query("UPDATE games SET state = 'prompt' WHERE gid = $1;",
     [gid]);
   begin_turn(gid);
-  io.to(gid).emit('start game');
+  get_gid_data(gid).then(data => {
+     io.to(gid).emit('start game', data);
+     console.log(data);
+  });
 }
 
 async function deal_cards(gid, to_deal) {
@@ -372,8 +375,13 @@ async function initialize_game(gid, options) {
     deck_limit = options.deck_limit;
   }
 
-  client.query("UPDATE games SET hand_size = $1, equal_hands = $2 WHERE gid = $3;",
-    [options.hand_size, options.equal_hands, gid]);
+  let win_score = 0;
+  if(options.win_score_on) {
+    win_score = options.win_score;
+  }
+
+  client.query("UPDATE games SET hand_size = $1, equal_hands = $2, win_score = $3 WHERE gid = $4;",
+    [options.hand_size, options.equal_hands, win_score, gid]);
 
   await client.query("DELETE FROM cards WHERE gid = $1", [gid]);
   await setup_cards(gid, deck_limit, options.artists);
@@ -608,10 +616,17 @@ async function check_game_end(gid) {
   let res = await client.query("SELECT * FROM cards WHERE gid = $1 AND state = 'hand';", [gid]);
   let num_cards = res.rows.length;
 
-  res = await client.query("SELECT * FROM users WHERE gid = $1 AND state != 'left';", [gid]);
+  res = await client.query("SELECT * FROM users WHERE gid = $1 AND state != 'left' ORDER BY score DESC;", [gid]);
   let num_users = res.rows.length;
 
   if(num_users > num_cards) {
+    return true;
+  }
+
+  let game_data = await get_gid_data(gid);
+
+  if(num_users > 0 && res.rows[0].score >= game_data.win_score
+    && game_data.win_score > 0) {
     return true;
   }
 
@@ -619,7 +634,7 @@ async function check_game_end(gid) {
 }
 
 function retrieve_artists(data, callback) {
-  client.query("SELECT DISTINCT artist FROM default_cards ORDER BY artist;").then(
+  client.query("SELECT artist, COUNT(artist) FROM default_cards GROUP BY artist ORDER BY artist;").then(
     res => {
       callback(res.rows);
   }).catch(err => report_sql_error(err, data.gid));
