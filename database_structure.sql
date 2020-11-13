@@ -31,6 +31,8 @@ CREATE TABLE games(
 	hand_size INTEGER DEFAULT 4,
 	equal_hands BOOLEAN DEFAULT TRUE,
 	win_score INTEGER DEFAULT 0,
+	round_limit INTEGER DEFAULT 0,
+	round_number INTEGER DEFAULT 0,
 	prompt VARCHAR,
 	PRIMARY KEY(gid),
 

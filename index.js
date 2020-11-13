@@ -363,7 +363,7 @@ function update_player_states(gid, turn, turn_state, other_state) {
 async function reset_game(gid) {
   client.query("DELETE FROM users WHERE gid = $1 AND state = 'left';", [gid]);
   client.query("UPDATE users SET score = 0, state = 'join', guess = NULL WHERE gid = $1;", [gid]);
-  client.query("UPDATE games SET state = 'pregame' WHERE gid = $1;", [gid]);
+  client.query("UPDATE games SET state = 'pregame', round_number = 0 WHERE gid = $1;", [gid]);
 }
 
 async function initialize_game(gid, options) {
@@ -380,8 +380,13 @@ async function initialize_game(gid, options) {
     win_score = options.win_score;
   }
 
-  client.query("UPDATE games SET hand_size = $1, equal_hands = $2, win_score = $3 WHERE gid = $4;",
-    [options.hand_size, options.equal_hands, win_score, gid]);
+  let round_limit = 0;
+  if(options.round_limit_on) {
+    round_limit = options.round_limit;
+  }
+
+  client.query("UPDATE games SET hand_size = $1, equal_hands = $2, win_score = $3, round_limit = $4 WHERE gid = $5;",
+    [options.hand_size, options.equal_hands, win_score, round_limit, gid]);
 
   await client.query("DELETE FROM cards WHERE gid = $1", [gid]);
   await setup_cards(gid, deck_limit, options.artists);
@@ -526,6 +531,8 @@ async function advance_turn(gid) {
   client.query("SELECT * FROM users WHERE gid = $1;", [gid]).then((res) => {
     io.to(gid).emit("end turn", res.rows);
   });
+
+  await client.query("UPDATE games SET round_number = round_number + 1 WHERE gid = $1", [gid]);
   
   let game_ended = await check_game_end(gid);
 
@@ -548,7 +555,7 @@ async function advance_turn(gid) {
 }
 
 async function begin_turn(gid) {
-  const res = await client.query("SELECT uid FROM users WHERE gid = $1 AND state != 'left' ORDER BY turn_recency DESC;", 
+  let res = await client.query("SELECT uid FROM users WHERE gid = $1 AND state != 'left' ORDER BY turn_recency DESC;", 
     [gid]);
 
   let num_users = res.rows.length;
@@ -559,14 +566,16 @@ async function begin_turn(gid) {
 
   let next_player = res.rows[0].uid;
 
-  client.query("UPDATE games SET turn = $1 WHERE gid = $2;", [next_player, gid]);
   client.query("UPDATE cards SET state = 'discard' WHERE gid = $1 AND state = 'table';", [gid]);
 
   update_player_states(gid, next_player, 'wait', 'idle');
 
-  update_game_state(gid, 'prompt');
+  res = await client.query("UPDATE games SET turn = $1, state = 'prompt' WHERE gid = $2 RETURNING *;", 
+    [next_player, gid]);
+
   io.to(gid).emit('round prompt', {
-      uid:next_player
+      uid:next_player,
+      game_data:res.rows[0]
     });
 }
 
@@ -627,6 +636,10 @@ async function check_game_end(gid) {
 
   if(num_users > 0 && res.rows[0].score >= game_data.win_score
     && game_data.win_score > 0) {
+    return true;
+  }
+
+  if(game_data.round_number >= game_data.round_limit && game_data.round_limit > 0) {
     return true;
   }
 
