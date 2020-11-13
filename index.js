@@ -330,7 +330,7 @@ async function deal_single_player(gid, uid, to_deal) {
 }
 
 function broadcast_cards(gid, remaining_cards) {
-  client.query("SELECT cid, filename, uid, state, artist FROM cards WHERE gid = $1 AND state = 'hand' OR state = 'table';", [gid])
+  client.query("SELECT cid, filename, uid, state, artist FROM cards WHERE gid = $1 AND (state = 'hand' OR state = 'table');", [gid])
   .then(res => {
     console.log("sending deal message");
     console.log(res.rows);
