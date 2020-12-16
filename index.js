@@ -264,7 +264,38 @@ async function get_gid_data(gid) {
   return res.rows[0];
 }
 
-async function setup_cards(gid, limit, artists) {
+function index_present(hex_code, index) {
+  let hex_index = Math.floor(index / 4);
+  
+  if(hex_index >= hex_code.length) {
+    return false;
+  }
+
+  let halfbyte = "0x" + hex_code[Math.floor(index / 4)];
+  console.log(halfbyte);
+  return parseInt(halfbyte) & (1 << (3 - index % 4));
+}
+
+async function setup_cards(gid, limit, artists, hex_code) {
+  if(hex_code != undefined && hex_code.length > 0) {
+    let res = await client.query("INSERT INTO cards(filename, gid, artist) \
+      (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid ORDER BY date_added, filename) RETURNING cid;", [gid]);
+    let to_delete = new Array();
+    for(let i = 0; i < res.rows.length; i++) {
+      if(!index_present(hex_code, i)) {
+        console.log(res.rows[i]);
+        to_delete.push(res.rows[i].cid);
+      }
+    }
+    console.log("cards not found in custom deck:");
+    console.log(to_delete);
+    await client.query("UPDATE cards SET state = 'ordered' WHERE gid = $1;", [gid]);
+    await client.query("DELETE FROM cards WHERE gid = $1 AND cid = ANY($2);",
+      [gid, to_delete]);
+    await client.query("INSERT INTO cards(filename, gid, artist) SELECT filename, gid, artist FROM cards WHERE gid = $1 ORDER BY random();", [gid]);
+    await client.query("DELETE FROM cards WHERE gid = $1 AND state = 'ordered';", [gid]);
+    return;
+  }
   if(limit == -1) {
     await client.query("INSERT INTO cards(filename, gid, artist) \
       (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid WHERE artist = ANY($2));",
@@ -272,7 +303,7 @@ async function setup_cards(gid, limit, artists) {
   } else {
     await client.query("INSERT INTO cards(filename, gid, artist) \
       (SELECT filename, gid, artist FROM default_cards INNER JOIN games ON $1 = gid WHERE artist = ANY($3) ORDER BY random() LIMIT $2);",
-      [gid, limit, artists]);
+      [gid, limit, artists]).catch(err => handle_generic_error(err));
   }
 }
 
@@ -385,11 +416,17 @@ async function initialize_game(gid, options) {
     round_limit = options.round_limit;
   }
 
+  let deck_hex_code = "";
+  if(options.custom_deck_on) {
+    deck_hex_code = options.custom_deck;
+    console.log("Custom deck: "+ deck_hex_code);
+  }
+
   client.query("UPDATE games SET hand_size = $1, equal_hands = $2, win_score = $3, round_limit = $4 WHERE gid = $5;",
     [options.hand_size, options.equal_hands, win_score, round_limit, gid]);
 
   await client.query("DELETE FROM cards WHERE gid = $1", [gid]);
-  await setup_cards(gid, deck_limit, options.artists);
+  await setup_cards(gid, deck_limit, options.artists, deck_hex_code);
 
   await fix_recencies(gid);
   

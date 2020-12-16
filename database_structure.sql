@@ -44,10 +44,11 @@ ON DELETE CASCADE;
 
 CREATE TABLE default_cards(
 	filename VARCHAR NOT NULL UNIQUE,
-	artist VARCHAR
+	artist VARCHAR,
+	date_added DATE
 );
 
-CREATE TYPE card_state AS ENUM ('deck', 'hand', 'table', 'discard');
+CREATE TYPE card_state AS ENUM ('deck', 'hand', 'table', 'discard', 'ordered');
 
 CREATE TABLE cards(
 	cid SERIAL UNIQUE,
