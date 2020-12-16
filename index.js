@@ -741,4 +741,14 @@ io.on('connection', (socket) => {
     retrieve_artists(data, callback);
   });
 
+  socket.on("form sync", data => {
+    socket.to(data.gid).emit("form sync", data);
+    console.log("received form sync message");
+    console.log(data);
+  });
+
+  socket.on("form request", data => {
+    socket.to(data.gid).emit("form request", data.form_id);
+  });
+
 });
