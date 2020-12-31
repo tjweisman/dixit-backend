@@ -623,8 +623,14 @@ async function start_guess_round(gid, turn) {
   const res = await client.query("SELECT * FROM cards WHERE state = 'table' AND gid = $1", [gid]);
   let num_cards = res.rows.length;
 
+  let order = shuffle([...Array(num_cards).keys()]);
+  
+  for(let i = 0;i < num_cards; i++) {
+    client.query("UPDATE cards SET order = $1 WHERE uid = $2;", [order[i], res.rows[i].cid]);
+  }
+
   io.to(gid).emit("round guess", {
-    order:shuffle([...Array(num_cards).keys()])
+    order:order
   });
 }
 

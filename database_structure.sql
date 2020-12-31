@@ -57,6 +57,7 @@ CREATE TABLE cards(
 	uid INTEGER,
 	gid INTEGER NOT NULL,
 	state card_state NOT NULL DEFAULT 'deck',
+	order INTEGER (CHECK order > 0),
 
 	PRIMARY KEY(cid),
 	CONSTRAINT fk_game FOREIGN KEY(gid) REFERENCES games(gid) ON DELETE CASCADE,
