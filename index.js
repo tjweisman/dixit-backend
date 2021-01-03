@@ -361,7 +361,7 @@ async function deal_single_player(gid, uid, to_deal) {
 }
 
 function broadcast_cards(gid, remaining_cards) {
-  client.query("SELECT cid, filename, uid, state, artist FROM cards WHERE gid = $1 AND (state = 'hand' OR state = 'table');", [gid])
+  client.query("SELECT * FROM cards WHERE gid = $1 AND (state = 'hand' OR state = 'table');", [gid])
   .then(res => {
     console.log("sending deal message");
     console.log(res.rows);
@@ -626,7 +626,7 @@ async function start_guess_round(gid, turn) {
   let order = shuffle([...Array(num_cards).keys()]);
   
   for(let i = 0;i < num_cards; i++) {
-    client.query("UPDATE cards SET order = $1 WHERE uid = $2;", [order[i], res.rows[i].cid]);
+    client.query("UPDATE cards SET display_order = $1 WHERE cid = $2;", [order[i], res.rows[i].cid]);
   }
 
   io.to(gid).emit("round guess", {
